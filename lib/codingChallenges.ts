@@ -1,6 +1,7 @@
-import fs from 'fs/promises'
+import fs from 'fs';
 import path from 'path'
 import logger from './logger'
+import { promisify } from 'util';
 
 export const SNIPPET_PATHS = Object.freeze(['./server.ts', './routes', './lib', './data', './data/static/web3-snippets', './frontend/src/app', './models'])
 
@@ -15,33 +16,53 @@ interface CachedCodeChallenge {
   neutralLines: number[]
 }
 
+const readFile = promisify(fs.readFile);
+const readdir = promisify(fs.readdir);
+const lstat = promisify(fs.lstat);
+
 export const findFilesWithCodeChallenges = async (paths: readonly string[]): Promise<FileMatch[]> => {
-  const matches = []
+  const matches: FileMatch[] = [];
+  
   for (const currPath of paths) {
-    if ((await fs.lstat(currPath)).isDirectory()) {
-      const files = await fs.readdir(currPath)
-      const moreMatches = await findFilesWithCodeChallenges(
-        files.map(file => path.resolve(currPath, file))
-      )
-      matches.push(...moreMatches)
-    } else {
-      try {
-        const code = await fs.readFile(currPath, 'utf8')
+    try {
+      const stats = await lstat(currPath);
+      
+      if (stats.isDirectory()) {
+        // Безопасное чтение директории
+        const files = await readdir(currPath);
+        
+        // Безопасное построение путей
+        const safePaths = files.map(file => {
+          const fullPath = path.join(currPath, file);
+          
+          // Проверка, что путь остается внутри разрешенной директории
+          const resolvedPath = path.resolve(fullPath);
+          if (!resolvedPath.startsWith(path.resolve(currPath))) {
+            throw new Error(`Path traversal attempt detected: ${file}`);
+          }
+          
+          return resolvedPath;
+        });
+
+        const moreMatches = await findFilesWithCodeChallenges(safePaths);
+        matches.push(...moreMatches);
+      } else {
+        // Проверка файла на наличие маркеров уязвимостей
+        const code = await readFile(currPath, 'utf8');
         if (
-          // strings are split so that it doesn't find itself...
           code.includes('// vuln-code' + '-snippet start') ||
           code.includes('# vuln-code' + '-snippet start')
         ) {
-          matches.push({ path: currPath, content: code })
+          matches.push({ path: currPath, content: code });
         }
-      } catch (e) {
-        logger.warn(`File ${currPath} could not be read. it might have been moved or deleted. If coding challenges are contained in the file, they will not be available.`)
       }
+    } catch (e) {
+      logger.warn(`File ${currPath} could not be processed. Error: ${e.message}`);
     }
   }
 
-  return matches
-}
+  return matches;
+};
 
 function getCodeChallengesFromFile (file: FileMatch) {
   const fileContent = file.content
@@ -72,11 +93,23 @@ function getCodingChallengeFromFileContent (source: string, challengeKey: string
   if (lines.length === 1) lines = snippet.split('\r')
   const vulnLines = []
   const neutralLines = []
+  // Предопределенные безопасные регулярные выражения
+  const VULN_LINE_REGEX = /vuln-code-snippet vuln-line ([\w-]+)/;
+  const NEUTRAL_LINE_REGEX = /vuln-code-snippet neutral-line ([\w-]+)/;
   for (let i = 0; i < lines.length; i++) {
-    if (new RegExp(`vuln-code-snippet vuln-line.*${challengeKey}`).exec(lines[i]) != null) {
-      vulnLines.push(i + 1)
-    } else if (new RegExp(`vuln-code-snippet neutral-line.*${challengeKey}`).exec(lines[i]) != null) {
-      neutralLines.push(i + 1)
+    const line = lines[i];
+    
+    // Проверка уязвимых строк
+    const vulnMatch = VULN_LINE_REGEX.exec(line);
+    if (vulnMatch && vulnMatch[1] === challengeKey) {
+      vulnLines.push(i + 1);
+      continue;
+    }
+    
+    // Проверка нейтральных строк
+    const neutralMatch = NEUTRAL_LINE_REGEX.exec(line);
+    if (neutralMatch && neutralMatch[1] === challengeKey) {
+      neutralLines.push(i + 1);
     }
   }
   snippet = snippet.replace(/\s?[/#]{0,2} vuln-code-snippet vuln-line.*/g, '')
