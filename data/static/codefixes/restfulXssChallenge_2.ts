@@ -1,3 +1,5 @@
+import DOMPurify from 'dompurify';
+
 ngAfterViewInit () {
     const products = this.productService.search('')
     const quantities = this.quantityService.getAll()
@@ -54,8 +56,11 @@ ngAfterViewInit () {
     }, (err) => { console.log(err) })
   }
 
-  encodeProductDescription (tableData: any[]) {
+  encodeProductDescription(tableData: any[]) {
     for (let i = 0; i < tableData.length; i++) {
-      tableData[i].description = tableData[i].description.replaceAll('<', '&lt;').replaceAll('>', '&gt;')
+      tableData[i].description = DOMPurify.sanitize(tableData[i].description, {
+        ALLOWED_TAGS: [], // Запрещаем все HTML-теги
+        ALLOWED_ATTR: []  // Запрещаем все атрибуты
+      });
     }
   }

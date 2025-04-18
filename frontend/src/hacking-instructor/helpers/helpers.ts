@@ -28,18 +28,36 @@ export function waitForInputToHaveValue (inputSelector: string, value: string, o
 
     if (options.replacement?.length === 2) {
       if (!config) {
-        const res = await fetch('/rest/admin/application-configuration')
-        const json = await res.json()
-        config = json.config
+        const res = await fetch('/rest/admin/application-configuration');
+        const json = await res.json();
+        config = json.config;
       }
-      const propertyChain = options.replacement[1].split('.')
-      let replacementValue = config
+    
+      const propertyChain = options.replacement[1].split('.');
+      let replacementValue = config;
+    
+      // Безопасный обход свойств
       for (const property of propertyChain) {
-        replacementValue = replacementValue[property]
+        if (replacementValue === null || replacementValue === undefined) {
+          break; // Прерываем цикл, если значение стало null/undefined
+        }
+        
+        // Проверяем, что свойство принадлежит самому объекту, а не его прототипу
+        if (!Object.prototype.hasOwnProperty.call(replacementValue, property)) {
+          replacementValue = undefined;
+          break;
+        }
+        
+        replacementValue = replacementValue[property];
       }
-      value = value.replace(options.replacement[0], replacementValue)
+    
+      if (replacementValue !== undefined && replacementValue !== null) {
+        value = value.replace(options.replacement[0], replacementValue);
+      } else {
+        console.warn(`Replacement value not found for chain: ${options.replacement[1]}`);
+      }
     }
-
+    
     while (true) {
       if (options.ignoreCase && inputElement.value.toLowerCase() === value.toLowerCase()) {
         break
